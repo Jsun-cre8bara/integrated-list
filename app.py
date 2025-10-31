@@ -8,11 +8,19 @@ import pandas as pd
 from datetime import datetime
 import io
 import re
+from PIL import Image
+
+# 로고 로딩 (logo.png 파일이 있는 경우)
+try:
+    logo = Image.open("logo.png")
+    page_icon = logo
+except:
+    page_icon = "🎭"
 
 # 페이지 설정
 st.set_page_config(
     page_title="티켓츠 통합명부",
-    page_icon="🎭",
+    page_icon=page_icon,
     layout="wide"
 )
 
@@ -92,6 +100,9 @@ def process_interpark(df, source_name):
         df.columns = df.iloc[5]
         df = df.iloc[6:].reset_index(drop=True)
         
+        # 빈 행 제거
+        df = df.dropna(how='all').reset_index(drop=True)
+        
         result = pd.DataFrame()
         result['예매처'] = source_name
         
@@ -122,6 +133,13 @@ def process_interpark(df, source_name):
         else:
             result['연락처'] = ''
         
+        # 필수 데이터 없는 행 제거 (예매자이름이나 공연일시가 비어있으면 제거)
+        result = result[
+            (result['예매자이름'].notna()) & 
+            (result['예매자이름'] != '') & 
+            (result['예매자이름'] != 'None')
+        ].reset_index(drop=True)
+        
         return result
     except Exception as e:
         st.error(f"인터파크 처리 오류: {e}")
@@ -134,6 +152,9 @@ def process_ticketlink(df, source_name):
         # 6행을 헤더로 사용 (인덱스 5)
         df.columns = df.iloc[5]
         df = df.iloc[6:].reset_index(drop=True)
+        
+        # 빈 행 제거
+        df = df.dropna(how='all').reset_index(drop=True)
         
         result = pd.DataFrame()
         result['예매처'] = source_name
@@ -175,6 +196,13 @@ def process_ticketlink(df, source_name):
         else:
             result['연락처'] = ''
         
+        # 필수 데이터 없는 행 제거
+        result = result[
+            (result['예매자이름'].notna()) & 
+            (result['예매자이름'] != '') & 
+            (result['예매자이름'] != 'None')
+        ].reset_index(drop=True)
+        
         return result
     except Exception as e:
         st.error(f"티켓링크 처리 오류: {e}")
@@ -205,6 +233,9 @@ def process_yes24(df, source_name):
         
         df.columns = df.iloc[19]
         df = df.iloc[20:].reset_index(drop=True)
+        
+        # 빈 행 제거
+        df = df.dropna(how='all').reset_index(drop=True)
         
         result = pd.DataFrame()
         result['예매처'] = source_name
@@ -258,6 +289,13 @@ def process_yes24(df, source_name):
             result['연락처'] = df[phone_col].apply(lambda x: safe_str(x, 100))
         else:
             result['연락처'] = ''
+        
+        # 필수 데이터 없는 행 제거
+        result = result[
+            (result['예매자이름'].notna()) & 
+            (result['예매자이름'] != '') & 
+            (result['예매자이름'] != 'None')
+        ].reset_index(drop=True)
         
         return result
     except Exception as e:
@@ -368,7 +406,16 @@ def merge_uploaded_files(uploaded_files):
 
 
 # 메인 UI
-st.title("🎭 티켓츠 예매 명부 통합")
+# 로고와 제목
+col1, col2 = st.columns([1, 10])
+with col1:
+    try:
+        st.image("logo.png", width=80)
+    except:
+        st.markdown("# 🎭")
+with col2:
+    st.title("티켓츠 예매 명부 통합")
+
 st.markdown("---")
 
 # 안내 메시지
@@ -376,7 +423,7 @@ with st.expander("📖 사용 방법", expanded=True):
     st.markdown("""
     ### 지원 예매처
     - **인터파크**: 6행 헤더 형식
-    - **티켓링크**: 5행 헤더 형식
+    - **티켓링크**: 6행 헤더 형식
     - **예스24**: 20행 헤더 형식
     
     ### 사용 방법
@@ -385,6 +432,11 @@ with st.expander("📖 사용 방법", expanded=True):
     3. 통합된 명부를 다운로드하세요!
     
     💡 **팁**: 파일명에 예매처 이름을 포함하면 더 정확합니다.
+    
+    ### ✨ 자동 처리 기능
+    - 빈 행 자동 제거
+    - 불완전한 데이터 자동 필터링
+    - 예매처별 형식 자동 인식
     """)
 
 st.markdown("---")
@@ -487,7 +539,8 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
-    <p>🎭 티켓츠(tCATS) 예매 명부 통합 시스템</p>
-    <p style='font-size: 0.8em;'>인터파크 / 티켓링크 / 예스24 자동 통합</p>
+    <p>🎭 티켓츠(tCATS) 예매 명부 통합 시스템 v2.0</p>
+    <p style='font-size: 0.8em;'>인터파크(6행) / 티켓링크(6행) / 예스24(20행) 자동 통합</p>
+    <p style='font-size: 0.8em;'>빈 행 자동 제거 · 데이터 검증 기능 포함</p>
 </div>
 """, unsafe_allow_html=True)
