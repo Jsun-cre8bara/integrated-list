@@ -129,11 +129,11 @@ def process_interpark(df, source_name):
 
 
 def process_ticketlink(df, source_name):
-    """티켓링크 데이터 처리 (헤더: 5행, 데이터: 6행부터)"""
+    """티켓링크 데이터 처리 (헤더: 6행, 데이터: 7행부터)"""
     try:
-        # 5행을 헤더로 사용 (인덱스 4)
-        df.columns = df.iloc[4]
-        df = df.iloc[5:].reset_index(drop=True)
+        # 6행을 헤더로 사용 (인덱스 5)
+        df.columns = df.iloc[5]
+        df = df.iloc[6:].reset_index(drop=True)
         
         result = pd.DataFrame()
         result['예매처'] = source_name
