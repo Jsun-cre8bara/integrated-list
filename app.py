@@ -209,30 +209,45 @@ def process_ticketlink(df, source_name):
         return pd.DataFrame()
 
 
-def process_yes24(df, source_name):
-    """예스24 데이터 처리 (공연일시: 6행 J~V열, 헤더: 20행, 데이터: 21행부터)"""
+def process_yes24(df, source_name, sheet_name=''):
+    """예스24 데이터 처리 (공연일시: 6행 J~V열 또는 14행 Q~T열, 헤더: 20행, 데이터: 21행부터)"""
     try:
-        # 6행 J~V열(인덱스 9~21)에서 공연일시 추출
+        sheet_label = f" ({sheet_name})" if sheet_name else ""
+        
+        # 공연일시 찾기
         performance_datetime = ''
         
+        # 1순위: 6행 J~V열(인덱스 9~21)에서 검색
         if len(df) > 5:
-            row_6 = df.iloc[5]  # 6행 (인덱스 5)
-            
-            # J열(9) ~ V열(21) 범위만 확인
+            row_6 = df.iloc[5]  # 6행
             start_col = 9  # J열
-            end_col = 22   # V열 다음 (range는 끝 포함 안 함)
+            end_col = 22   # V열 다음
             
             for col_idx in range(start_col, min(end_col, len(row_6))):
                 cell_value = str(row_6.iloc[col_idx])
-                # "2022-11-20 15:00" 형식 찾기
                 if re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}', cell_value):
                     match = re.search(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', cell_value)
                     if match:
                         performance_datetime = format_datetime(match.group(1))
-                        st.success(f"✅ 예스24 6행 {chr(65+col_idx)}열에서 공연일시 추출: {performance_datetime}")
+                        st.success(f"✅ 예스24{sheet_label} 6행 {chr(65+col_idx)}열에서 공연일시: {performance_datetime}")
                         break
         
-        # J~V열에서 못 찾았으면 6행 전체에서 다시 검색
+        # 2순위: 14행 Q~T열(인덱스 16~19)에서 검색
+        if not performance_datetime and len(df) > 13:
+            row_14 = df.iloc[13]  # 14행
+            start_col = 16  # Q열
+            end_col = 20    # T열 다음
+            
+            for col_idx in range(start_col, min(end_col, len(row_14))):
+                cell_value = str(row_14.iloc[col_idx])
+                if re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}', cell_value):
+                    match = re.search(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', cell_value)
+                    if match:
+                        performance_datetime = format_datetime(match.group(1))
+                        st.success(f"✅ 예스24{sheet_label} 14행 {chr(65+col_idx)}열에서 공연일시: {performance_datetime}")
+                        break
+        
+        # 3순위: 6행 전체 검색
         if not performance_datetime and len(df) > 5:
             row_6 = df.iloc[5]
             for cell_value in row_6:
@@ -241,138 +256,101 @@ def process_yes24(df, source_name):
                     match = re.search(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', cell_str)
                     if match:
                         performance_datetime = format_datetime(match.group(1))
-                        st.info(f"✅ 예스24 6행에서 공연일시 발견: {performance_datetime}")
+                        st.info(f"✅ 예스24{sheet_label} 6행에서 공연일시: {performance_datetime}")
                         break
         
-        # 그래도 못 찾았으면 1~10행에서 검색
+        # 4순위: 1~15행 전체 검색
         if not performance_datetime:
-            st.warning("⚠️ 예스24 6행 J~V열에서 공연일시를 찾을 수 없어 전체 검색합니다...")
-            for i in range(min(10, len(df))):
-                for col in df.columns:
-                    cell_value = str(df.iloc[i][col])
+            st.warning(f"⚠️ 예스24{sheet_label} 6행, 14행에서 찾지 못해 전체 검색...")
+            for i in range(min(15, len(df))):
+                for col_idx in range(min(30, len(df.columns))):
+                    cell_value = str(df.iloc[i, col_idx])
                     if re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}', cell_value):
                         match = re.search(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', cell_value)
                         if match:
                             performance_datetime = format_datetime(match.group(1))
-                            st.info(f"✅ 예스24 공연일시를 {i+1}행에서 찾았습니다: {performance_datetime}")
+                            st.info(f"✅ 예스24{sheet_label} {i+1}행에서 공연일시: {performance_datetime}")
                             break
                 if performance_datetime:
                     break
         
         if not performance_datetime:
-            st.error("❌ 예스24 파일에서 공연일시를 찾을 수 없습니다.")
+            st.error(f"❌ 예스24{sheet_label} 공연일시를 찾을 수 없습니다.")
         
-        # 20행을 헤더로 사용 (인덱스 19)
+        # 20행을 헤더로 사용
         if len(df) < 20:
-            st.error(f"❌ 예스24 파일이 너무 짧습니다 (총 {len(df)}행). 20행 이상이어야 합니다.")
+            st.error(f"❌ 예스24{sheet_label} 파일이 너무 짧습니다 (총 {len(df)}행).")
             return pd.DataFrame()
-        
-        # 헤더 확인
-        header_row = df.iloc[19]
-        header_sample = [str(h) for h in list(header_row[:5]) if str(h) != 'nan']
-        st.info(f"📋 예스24 20행 헤더 샘플: {header_sample}")
         
         df.columns = df.iloc[19]
         df = df.iloc[20:].reset_index(drop=True)
-        
-        # 빈 행 제거
         df = df.dropna(how='all').reset_index(drop=True)
         
         if len(df) == 0:
-            st.error("❌ 예스24: 20행 이후에 데이터가 없습니다.")
+            st.warning(f"⚠️ 예스24{sheet_label} 20행 이후 데이터 없음")
             return pd.DataFrame()
         
         result = pd.DataFrame()
-        result['예매처'] = source_name
         
-        # 공연일시는 6행에서 추출한 값 사용
+        # 예매처 이름: 파일명_시트명
+        full_source_name = f"{source_name}_{sheet_name}" if sheet_name else source_name
+        result['예매처'] = full_source_name
         result['공연일시'] = performance_datetime if performance_datetime else 'None'
         
-        # "예매자명" 헤더 찾기
+        # 예매자명 찾기
         name_col = None
         for col in df.columns:
             col_str = str(col).strip()
-            if col_str == '예매자명':
+            if col_str == '예매자명' or '예매자' in col_str or '이름' in col_str or '성명' in col_str:
                 name_col = col
-                st.success(f"✅ 예스24 '예매자명' 컬럼 발견!")
-                break
-            elif '예매자' in col_str or '이름' in col_str or '성명' in col_str:
-                name_col = col
-                st.info(f"✅ 예스24 예매자 컬럼 발견: '{col_str}'")
                 break
         
         if name_col:
             result['예매자이름'] = df[name_col].apply(safe_str)
         else:
-            # 처음 10개 열 중 데이터가 있는 열 찾기
-            st.warning("⚠️ 예스24: '예매자명' 헤더를 찾을 수 없어 자동으로 찾습니다.")
             found = False
             for idx in range(min(10, len(df.columns))):
                 col = df.columns[idx]
                 if df[col].notna().any():
-                    # 데이터가 이름처럼 보이는지 확인 (2-10자)
                     sample = df[col].dropna().head(3).astype(str)
                     if len(sample) > 0 and all(2 <= len(s.strip()) <= 10 for s in sample if s.strip()):
                         result['예매자이름'] = df[col].apply(safe_str)
-                        st.info(f"✅ 예스24 예매자명을 {idx+1}번째 열에서 찾았습니다.")
                         found = True
                         break
-            
             if not found:
                 result['예매자이름'] = ''
-                st.error("❌ 예스24: 예매자명을 찾을 수 없습니다.")
         
-        # 매수: 각 행이 1좌석
         result['매수'] = '1'
         
-        # 좌석정보 찾기
+        # 좌석정보
         seat_col = None
         for col in df.columns:
-            col_str = str(col).strip()
-            if '좌석' in col_str:
+            if '좌석' in str(col):
                 seat_col = col
                 break
+        result['좌석번호'] = df[seat_col].apply(lambda x: safe_str(x, 200)) if seat_col else ''
         
-        if seat_col:
-            result['좌석번호'] = df[seat_col].apply(lambda x: safe_str(x, 200))
-            st.success(f"✅ 예스24 좌석정보 발견: '{seat_col}'")
-        else:
-            result['좌석번호'] = ''
-            st.warning("⚠️ 예스24: 좌석 정보 컬럼을 찾을 수 없습니다.")
-        
-        # 비상연락처 찾기
+        # 연락처
         phone_col = None
         for col in df.columns:
-            col_str = str(col).strip()
-            if '연락처' in col_str or '전화' in col_str:
+            if '연락처' in str(col) or '전화' in str(col):
                 phone_col = col
                 break
-        
-        if phone_col:
-            result['연락처'] = df[phone_col].apply(lambda x: safe_str(x, 100))
-            st.success(f"✅ 예스24 연락처 발견: '{phone_col}'")
-        else:
-            result['연락처'] = ''
-            st.warning("⚠️ 예스24: 연락처 컬럼을 찾을 수 없습니다.")
+        result['연락처'] = df[phone_col].apply(lambda x: safe_str(x, 100)) if phone_col else ''
         
         # 필수 데이터 없는 행 제거
-        before_count = len(result)
         result = result[
             (result['예매자이름'].notna()) & 
             (result['예매자이름'] != '') & 
             (result['예매자이름'] != 'None')
         ].reset_index(drop=True)
-        after_count = len(result)
-        
-        if before_count > after_count:
-            st.info(f"ℹ️ 예스24: 예매자 정보가 없는 {before_count - after_count}행을 제거했습니다.")
         
         if len(result) > 0:
-            st.success(f"✅ 예스24 처리 완료: {len(result)}건")
+            st.success(f"✅ 예스24{sheet_label} 처리 완료: {len(result)}건")
         
         return result
     except Exception as e:
-        st.error(f"❌ 예스24 처리 오류: {e}")
+        st.error(f"❌ 예스24{sheet_label} 처리 오류: {e}")
         import traceback
         st.code(traceback.format_exc())
         return pd.DataFrame()
