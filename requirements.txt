@@ -12,3 +12,5 @@ passlib[bcrypt]
 pytest
 httpx
 aiosqlite
+pydantic[email]
+email-validator
