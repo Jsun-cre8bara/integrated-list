@@ -3,3 +3,11 @@ pandas
 openpyxl
 xlrd>=2.0.1
 Pillow
+fastapi
+uvicorn[standard]
+SQLAlchemy>=2.0
+asyncpg
+python-jose[cryptography]
+passlib[bcrypt]
+pytest
+httpx
