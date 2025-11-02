@@ -36,38 +36,48 @@ def safe_str(value, max_length=1000):
 
 
 def format_datetime(date_str, time_str=None):
-    """날짜를 yy-mm-dd 00:00시 형식으로 변환"""
+    """다양한 문자열을 'YYYY-MM-DD HH:MM' 형식으로 변환"""
     try:
         if pd.isna(date_str) or date_str == '':
             return ''
-        
+
         date_str = str(date_str).strip()
-        
+
+        def normalize_year(year_text):
+            digits = re.sub(r'[^0-9]', '', safe_str(year_text))
+            if not digits:
+                return ''
+            if len(digits) == 2:
+                return f"20{digits}"
+            if len(digits) >= 4:
+                return digits[-4:]
+            return digits.zfill(4)
+
         # 20221120 1500 형식 (인터파크)
         if len(date_str) >= 13 and date_str[:8].isdigit():
-            year = date_str[2:4]
+            year = normalize_year(date_str[:4])
             month = date_str[4:6]
             day = date_str[6:8]
             hour = date_str[9:11] if len(date_str) > 9 else '00'
             minute = date_str[11:13] if len(date_str) > 11 else '00'
-            return f"{year}-{month}-{day} {hour}:{minute}시"
-        
+            return f"{year}-{month}-{day} {hour}:{minute}"
+
         # 2022.11.19 형식 (티켓링크)
         if '.' in date_str:
-            parts = date_str.split('.')
+            parts = [p.strip() for p in date_str.split('.') if p is not None and p.strip() != '']
             if len(parts) >= 3:
-                year = parts[0][-2:]
+                year = normalize_year(parts[0])
                 month = parts[1].zfill(2)
                 day = parts[2].zfill(2)
-                
+
                 # 시간이 별도로 있으면 추가
                 if time_str and '/' in str(time_str):
                     time_part = str(time_str).split('/')[1]  # "1/14:00" -> "14:00"
                     if ':' in time_part:
                         hour, minute = time_part.split(':')
-                        return f"{year}-{month}-{day} {hour.zfill(2)}:{minute.zfill(2)}시"
-                
-                return f"{year}-{month}-{day} 00:00시"
+                        return f"{year}-{month}-{day} {hour.zfill(2)}:{minute.zfill(2)}"
+
+                return f"{year}-{month}-{day} 00:00"
         
         # 2022-11-20 15:00 형식 (예스24)
         if '-' in date_str:
@@ -75,22 +85,43 @@ def format_datetime(date_str, time_str=None):
             parts = date_str.split()
             date_part = parts[0]
             time_part = parts[1] if len(parts) > 1 else None
-            
+
             date_components = date_part.split('-')
             if len(date_components) >= 3:
-                year = date_components[0][-2:]
+                year = normalize_year(date_components[0])
                 month = date_components[1].zfill(2)
                 day = date_components[2].zfill(2)
-                
+
                 if time_part and ':' in time_part:
                     hour, minute = time_part.split(':')[:2]
-                    return f"{year}-{month}-{day} {hour.zfill(2)}:{minute.zfill(2)}시"
-                
-                return f"{year}-{month}-{day} 00:00시"
-        
+                    return f"{year}-{month}-{day} {hour.zfill(2)}:{minute.zfill(2)}"
+
+                return f"{year}-{month}-{day} 00:00"
+
         return safe_str(date_str)
     except Exception as e:
         return safe_str(date_str)
+
+
+def find_column(df, keywords):
+    """주어진 키워드를 포함하는 첫 번째 열 이름을 반환"""
+    lowercase_keywords = [kw.lower() for kw in keywords]
+    for col in df.columns:
+        col_str = safe_str(col).lower()
+        if any(keyword in col_str for keyword in lowercase_keywords):
+            return col
+    return None
+
+
+def first_non_empty(series):
+    """시리즈에서 첫 번째로 비어있지 않은 값을 반환"""
+    if series is None:
+        return ''
+    for value in series:
+        str_value = safe_str(value)
+        if str_value:
+            return str_value
+    return ''
 
 
 def process_interpark(df, source_name):
@@ -99,47 +130,64 @@ def process_interpark(df, source_name):
         # 6행을 헤더로 사용 (인덱스 5)
         df.columns = df.iloc[5]
         df = df.iloc[6:].reset_index(drop=True)
-        
+
         # 빈 행 제거
         df = df.dropna(how='all').reset_index(drop=True)
-        
+
         result = pd.DataFrame()
         result['예매처'] = source_name
-        
-        # A열: 공연일시 (20221120 1500)
+
+        performance_col = find_column(df, ['공연명', '상품명', '티켓명', '상품'])
+        if performance_col:
+            performance_series = df[performance_col].apply(safe_str)
+            base_name = first_non_empty(performance_series) or safe_str(source_name)
+            if performance_series.replace('', pd.NA).isna().all():
+                result['공연명'] = base_name
+            else:
+                result['공연명'] = performance_series.replace('', pd.NA).fillna(base_name)
+        else:
+            result['공연명'] = safe_str(source_name)
+
+        # 공연일시
         if '공연일시' in df.columns:
-            result['공연일시'] = df['공연일시'].apply(lambda x: format_datetime(x))
+            result['공연날짜시간'] = df['공연일시'].apply(lambda x: format_datetime(x))
         else:
-            result['공연일시'] = ''
-        
-        # J열: 예매자
-        if '예매자' in df.columns:
-            result['예매자이름'] = df['예매자'].apply(safe_str)
+            result['공연날짜시간'] = ''
+
+        name_col = find_column(df, ['예매자', '성명', '이름'])
+        if name_col:
+            result['이름'] = df[name_col].apply(safe_str)
         else:
-            result['예매자이름'] = ''
-        
-        # 매수: 각 행이 1좌석
-        result['매수'] = '1'
-        
-        # E열: 좌석정보
-        if '좌석정보' in df.columns:
-            result['좌석번호'] = df['좌석정보'].apply(lambda x: safe_str(x, 200))
+            result['이름'] = ''
+
+        quantity_col = find_column(df, ['매수', '수량', '예약수', '좌석수'])
+        if quantity_col:
+            result['매수'] = df[quantity_col].apply(lambda x: safe_str(x, 50))
         else:
-            result['좌석번호'] = ''
-        
-        # K열: 전화번호
-        if '전화번호' in df.columns:
-            result['연락처'] = df['전화번호'].apply(lambda x: safe_str(x, 100))
+            result['매수'] = '1'
+
+        seat_col = find_column(df, ['좌석'])
+        if seat_col:
+            result['예약좌석번호'] = df[seat_col].apply(lambda x: safe_str(x, 200))
         else:
-            result['연락처'] = ''
-        
-        # 필수 데이터 없는 행 제거 (예매자이름이나 공연일시가 비어있으면 제거)
+            result['예약좌석번호'] = ''
+
+        phone_col = find_column(df, ['전화', '연락'])
+        if phone_col:
+            result['전화번호'] = df[phone_col].apply(lambda x: safe_str(x, 100))
+        else:
+            result['전화번호'] = ''
+
+        result['발권여부'] = 'X'
+        result['입장여부'] = 'X'
+
+        # 필수 데이터 없는 행 제거 (이름이 비어있으면 제거)
         result = result[
-            (result['예매자이름'].notna()) & 
-            (result['예매자이름'] != '') & 
-            (result['예매자이름'] != 'None')
+            (result['이름'].notna()) &
+            (result['이름'] != '') &
+            (result['이름'] != 'None')
         ].reset_index(drop=True)
-        
+
         return result
     except Exception as e:
         st.error(f"인터파크 처리 오류: {e}")
@@ -158,51 +206,63 @@ def process_ticketlink(df, source_name):
         
         result = pd.DataFrame()
         result['예매처'] = source_name
-        
+
+        performance_col = find_column(df, ['공연명', '상품명', '공연'])
+        if performance_col:
+            performance_series = df[performance_col].apply(safe_str)
+            base_name = first_non_empty(performance_series) or safe_str(source_name)
+            if performance_series.replace('', pd.NA).isna().all():
+                result['공연명'] = base_name
+            else:
+                result['공연명'] = performance_series.replace('', pd.NA).fillna(base_name)
+        else:
+            result['공연명'] = safe_str(source_name)
+
         # A열: 공연일, B열: 회차/시간
         if '공연일' in df.columns and '회차/시간' in df.columns:
-            result['공연일시'] = df.apply(
+            result['공연날짜시간'] = df.apply(
                 lambda row: format_datetime(row['공연일'], row['회차/시간']),
                 axis=1
             )
         elif '공연일' in df.columns:
-            result['공연일시'] = df['공연일'].apply(lambda x: format_datetime(x))
+            result['공연날짜시간'] = df['공연일'].apply(lambda x: format_datetime(x))
         else:
-            result['공연일시'] = ''
-        
-        # D열: 성명
-        if '성명' in df.columns:
-            result['예매자이름'] = df['성명'].apply(safe_str)
+            result['공연날짜시간'] = ''
+
+        name_col = find_column(df, ['성명', '예매자', '이름'])
+        if name_col:
+            result['이름'] = df[name_col].apply(safe_str)
         else:
-            result['예매자이름'] = ''
-        
-        # H열: 매수
-        if '매수' in df.columns:
-            result['매수'] = df['매수'].apply(lambda x: safe_str(x, 50))
+            result['이름'] = ''
+
+        quantity_col = find_column(df, ['매수', '수량', '좌석수'])
+        if quantity_col:
+            result['매수'] = df[quantity_col].apply(lambda x: safe_str(x, 50))
         else:
-            result['매수'] = ''
-        
-        # J열: 좌석
-        if '좌석' in df.columns:
-            result['좌석번호'] = df['좌석'].apply(lambda x: safe_str(x, 200))
+            result['매수'] = '1'
+
+        seat_col = find_column(df, ['좌석'])
+        if seat_col:
+            result['예약좌석번호'] = df[seat_col].apply(lambda x: safe_str(x, 200))
         else:
-            result['좌석번호'] = ''
-        
-        # E열: 연락처(SMS)
-        if '연락처(SMS)' in df.columns:
-            result['연락처'] = df['연락처(SMS)'].apply(lambda x: safe_str(x, 100))
-        elif '연락처' in df.columns:
-            result['연락처'] = df['연락처'].apply(lambda x: safe_str(x, 100))
+            result['예약좌석번호'] = ''
+
+        phone_col = find_column(df, ['연락처', '전화'])
+        if phone_col:
+            result['전화번호'] = df[phone_col].apply(lambda x: safe_str(x, 100))
         else:
-            result['연락처'] = ''
-        
+            result['전화번호'] = ''
+
+        result['발권여부'] = 'X'
+        result['입장여부'] = 'X'
+
         # 필수 데이터 없는 행 제거
         result = result[
-            (result['예매자이름'].notna()) & 
-            (result['예매자이름'] != '') & 
-            (result['예매자이름'] != 'None')
+            (result['이름'].notna()) &
+            (result['이름'] != '') &
+            (result['이름'] != 'None')
         ].reset_index(drop=True)
-        
+
         return result
     except Exception as e:
         st.error(f"티켓링크 처리 오류: {e}")
@@ -291,12 +351,23 @@ def process_yes24(df, source_name, sheet_name=''):
             return pd.DataFrame()
         
         result = pd.DataFrame()
-        
+
         # 예매처 이름: 파일명_시트명
         full_source_name = f"{source_name}_{sheet_name}" if sheet_name else source_name
         result['예매처'] = full_source_name
-        result['공연일시'] = performance_datetime if performance_datetime else 'None'
-        
+        result['공연날짜시간'] = performance_datetime if performance_datetime else ''
+
+        performance_col = find_column(df, ['공연명', '상품명', '공연'])
+        if performance_col:
+            performance_series = df[performance_col].apply(safe_str)
+            base_name = first_non_empty(performance_series) or safe_str(source_name)
+            if performance_series.replace('', pd.NA).isna().all():
+                result['공연명'] = base_name
+            else:
+                result['공연명'] = performance_series.replace('', pd.NA).fillna(base_name)
+        else:
+            result['공연명'] = safe_str(source_name)
+
         # 예매자명 찾기
         name_col = None
         for col in df.columns:
@@ -304,9 +375,9 @@ def process_yes24(df, source_name, sheet_name=''):
             if col_str == '예매자명' or '예매자' in col_str or '이름' in col_str or '성명' in col_str:
                 name_col = col
                 break
-        
+
         if name_col:
-            result['예매자이름'] = df[name_col].apply(safe_str)
+            result['이름'] = df[name_col].apply(safe_str)
         else:
             found = False
             for idx in range(min(10, len(df.columns))):
@@ -314,40 +385,48 @@ def process_yes24(df, source_name, sheet_name=''):
                 if df[col].notna().any():
                     sample = df[col].dropna().head(3).astype(str)
                     if len(sample) > 0 and all(2 <= len(s.strip()) <= 10 for s in sample if s.strip()):
-                        result['예매자이름'] = df[col].apply(safe_str)
+                        result['이름'] = df[col].apply(safe_str)
                         found = True
                         break
             if not found:
-                result['예매자이름'] = ''
-        
-        result['매수'] = '1'
-        
+                result['이름'] = ''
+
+        seat_count_col = find_column(df, ['매수', '수량', '좌석수', '인원'])
+        if seat_count_col:
+            result['매수'] = df[seat_count_col].apply(lambda x: safe_str(x, 50))
+        elif len(df.columns) > 16:
+            fallback_col = df.columns[16]
+            result['매수'] = df[fallback_col].apply(lambda x: safe_str(x, 50))
+        else:
+            result['매수'] = '1'
+
         # 좌석정보
-        seat_col = None
-        for col in df.columns:
-            if '좌석' in str(col):
-                seat_col = col
-                break
-        result['좌석번호'] = df[seat_col].apply(lambda x: safe_str(x, 200)) if seat_col else ''
-        
+        seat_col = find_column(df, ['좌석'])
+        if seat_col:
+            result['예약좌석번호'] = df[seat_col].apply(lambda x: safe_str(x, 200))
+        else:
+            result['예약좌석번호'] = ''
+
         # 연락처
-        phone_col = None
-        for col in df.columns:
-            if '연락처' in str(col) or '전화' in str(col):
-                phone_col = col
-                break
-        result['연락처'] = df[phone_col].apply(lambda x: safe_str(x, 100)) if phone_col else ''
-        
+        phone_col = find_column(df, ['연락처', '전화'])
+        if phone_col:
+            result['전화번호'] = df[phone_col].apply(lambda x: safe_str(x, 100))
+        else:
+            result['전화번호'] = ''
+
+        result['발권여부'] = 'X'
+        result['입장여부'] = 'X'
+
         # 필수 데이터 없는 행 제거
         result = result[
-            (result['예매자이름'].notna()) & 
-            (result['예매자이름'] != '') & 
-            (result['예매자이름'] != 'None')
+            (result['이름'].notna()) &
+            (result['이름'] != '') &
+            (result['이름'] != 'None')
         ].reset_index(drop=True)
-        
+
         if len(result) > 0:
             st.success(f"✅ 예스24{sheet_label} 처리 완료: {len(result)}건")
-        
+
         return result
     except Exception as e:
         st.error(f"❌ 예스24{sheet_label} 처리 오류: {e}")
@@ -394,6 +473,22 @@ def detect_source_type(df, filename):
         return 'unknown'
 
 
+def read_excel_with_fallback(file_bytes, file_ext, **kwargs):
+    """xlrd 미설치 등으로 인한 ValueError를 사용자 친화적으로 처리"""
+    buffer = io.BytesIO(file_bytes)
+    if file_ext == 'xls':
+        kwargs.setdefault('engine', 'xlrd')
+    try:
+        return pd.read_excel(buffer, **kwargs)
+    except ImportError as exc:
+        raise RuntimeError("xlrd 패키지가 설치되어야 합니다. 'pip install xlrd==2.0.1' 명령으로 설치해주세요.") from exc
+    except ValueError as exc:
+        message = str(exc)
+        if 'xlrd' in message.lower():
+            raise RuntimeError("xlrd 패키지가 없어 .xls 파일을 열 수 없습니다. 'pip install xlrd==2.0.1' 설치 후 다시 시도해주세요.") from exc
+        raise
+
+
 def merge_uploaded_files(uploaded_files):
     """업로드된 파일들을 통합"""
     all_data = []
@@ -403,32 +498,44 @@ def merge_uploaded_files(uploaded_files):
         try:
             # 파일 확장자 확인
             file_ext = uploaded_file.name.split('.')[-1].lower()
-            
-            # 엑셀 파일 읽기
-            if file_ext == 'xls':
-                df = pd.read_excel(uploaded_file, engine='xlrd', header=None)
-            else:
-                df = pd.read_excel(uploaded_file, header=None)
-            
+            file_bytes = uploaded_file.getvalue()
+
+            # 감지용 데이터프레임 로드
+            df_for_detection = read_excel_with_fallback(file_bytes, file_ext, header=None)
+
             # 파일명 (확장자 제외)
             source_name = uploaded_file.name.rsplit('.', 1)[0]
-            
+
             # 예매처 타입 자동 감지
-            source_type = detect_source_type(df, uploaded_file.name)
-            
+            source_type = detect_source_type(df_for_detection, uploaded_file.name)
+
             processing_log.append({
                 'file': uploaded_file.name,
-                'rows': len(df),
+                'rows': len(df_for_detection),
                 'type': source_type
             })
-            
+
             # 예매처별 처리
             if source_type == 'interpark':
+                df = read_excel_with_fallback(file_bytes, file_ext, header=None)
                 result_df = process_interpark(df, source_name)
             elif source_type == 'ticketlink':
+                df = read_excel_with_fallback(file_bytes, file_ext, header=None)
                 result_df = process_ticketlink(df, source_name)
             elif source_type == 'yes24':
-                result_df = process_yes24(df, source_name)
+                sheet_results = []
+                read_kwargs = {'sheet_name': None, 'header': None}
+                sheets = read_excel_with_fallback(file_bytes, file_ext, **read_kwargs)
+                for sheet_name, sheet_df in sheets.items():
+                    if sheet_df is None or sheet_df.dropna(how='all').empty:
+                        continue
+                    sheet_result = process_yes24(sheet_df, source_name, sheet_name)
+                    if not sheet_result.empty:
+                        sheet_results.append(sheet_result)
+                if sheet_results:
+                    result_df = pd.concat(sheet_results, ignore_index=True)
+                else:
+                    result_df = pd.DataFrame()
             else:
                 processing_log[-1]['error'] = '예매처를 자동 감지할 수 없습니다'
                 continue
@@ -439,6 +546,11 @@ def merge_uploaded_files(uploaded_files):
             else:
                 processing_log[-1]['error'] = '처리된 데이터가 없습니다'
             
+        except RuntimeError as e:
+            processing_log.append({
+                'file': uploaded_file.name,
+                'error': str(e)
+            })
         except Exception as e:
             processing_log.append({
                 'file': uploaded_file.name,
@@ -450,11 +562,29 @@ def merge_uploaded_files(uploaded_files):
     
     # 모든 데이터 합치기
     merged_df = pd.concat(all_data, ignore_index=True)
-    
-    # 컬럼 순서 정리
-    final_columns = ['예매처', '공연일시', '예매자이름', '매수', '좌석번호', '연락처']
+
+    # 컬럼 순서 정리 및 누락값 보정
+    final_columns = [
+        '공연명',
+        '공연날짜시간',
+        '예매처',
+        '이름',
+        '전화번호',
+        '매수',
+        '예약좌석번호',
+        '발권여부',
+        '입장여부'
+    ]
+
+    for column in final_columns:
+        if column not in merged_df.columns:
+            merged_df[column] = ''
+
     merged_df = merged_df[final_columns]
-    
+
+    merged_df['발권여부'] = merged_df['발권여부'].replace('', 'X').fillna('X')
+    merged_df['입장여부'] = merged_df['입장여부'].replace('', 'X').fillna('X')
+
     return merged_df, processing_log
 
 
