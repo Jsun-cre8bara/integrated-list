@@ -88,70 +88,70 @@ with tab1:
             try:
                 file_name = uploaded_file.name
                 
+                # 플랫폼 감지
                 if '티켓링크' in file_name or 'ticketlink' in file_name.lower():
-                    df_header = pd.read_excel(uploaded_file, header=None, nrows=5)
-                    
-                    performance_name = ""
-                    performance_date = ""
-                    
-                    for idx, row in df_header.iterrows():
-                        row_str = str(row[0])
-                        
-                        if '상품명' in row_str:
-                            match = re.search(r'상품명\s*[:：]\s*(.+)', row_str)
-                            if match:
-                                performance_name = match.group(1).strip()
-                        
-                        if '조회기간' in row_str:
-                            match = re.search(r'(\d{4}\.\d{2}\.\d{2})', row_str)
-                            if match:
-                                performance_date = match.group(1)
-                    
-                    return {'name': performance_name, 'date': performance_date, 'time': '', 'source': '티켓링크'}
-                
+                    source = '티켓링크'
+                    nrows = 10
                 elif '인터파크' in file_name or 'interpark' in file_name.lower():
-                    df_header = pd.read_excel(uploaded_file, header=None, nrows=5)
-                    
-                    performance_name = ""
-                    performance_date = ""
-                    
-                    for idx, row in df_header.iterrows():
-                        row_str = str(row[0])
-                        
-                        if '공연명' in row_str or '상품명' in row_str:
-                            parts = row_str.split(':')
-                            if len(parts) > 1:
-                                performance_name = parts[1].strip()
-                        
-                        match = re.search(r'(\d{4}\.\d{2}\.\d{2})', row_str)
-                        if match:
-                            performance_date = match.group(1)
-                    
-                    return {'name': performance_name, 'date': performance_date, 'time': '', 'source': '인터파크'}
-                
+                    source = '인터파크'
+                    nrows = 10
                 elif '예스24' in file_name or 'yes24' in file_name.lower():
-                    df_header = pd.read_excel(uploaded_file, header=None, nrows=20)
-                    
-                    performance_name = ""
-                    performance_date = ""
-                    
-                    for idx, row in df_header.iterrows():
-                        row_str = str(row[0])
-                        
-                        if '공연명' in row_str or '상품명' in row_str:
-                            parts = row_str.split(':')
-                            if len(parts) > 1:
-                                performance_name = parts[1].strip()
-                        
-                        match = re.search(r'(\d{4}\.\d{2}\.\d{2})', row_str)
-                        if match:
-                            performance_date = match.group(1)
-                    
-                    return {'name': performance_name, 'date': performance_date, 'time': '', 'source': '예스24'}
+                    source = '예스24'
+                    nrows = 25
+                else:
+                    source = '알 수 없음'
+                    nrows = 10
+                
+                # Excel 헤더 읽기
+                df_header = pd.read_excel(uploaded_file, header=None, nrows=nrows)
+                
+                performance_name = ""
+                performance_date = ""
+                performance_time = ""
+                
+                # 모든 셀 검사
+                for idx in range(len(df_header)):
+                    for col in range(min(5, len(df_header.columns))):
+                        try:
+                            cell = str(df_header.iloc[idx, col])
+                            if pd.isna(cell) or cell == 'nan':
+                                continue
+                            
+                            # 공연명/상품명
+                            if not performance_name and ('공연명' in cell or '상품명' in cell):
+                                if ':' in cell or '：' in cell:
+                                    parts = re.split(r'[:：]', cell, 1)
+                                    if len(parts) > 1:
+                                        performance_name = parts[1].strip()
+                                        performance_name = re.sub(r'\([^)]*\)', '', performance_name).strip()
+                            
+                            # 날짜
+                            if not performance_date:
+                                date_match = re.search(r'(\d{4})[.-](\d{2})[.-](\d{2})', cell)
+                                if date_match:
+                                    performance_date = f"{date_match.group(1)}.{date_match.group(2)}.{date_match.group(3)}"
+                            
+                            # 시간
+                            if not performance_time and '조회' not in cell:
+                                time_match = re.search(r'(\d{1,2}):(\d{2})', cell)
+                                if time_match:
+                                    performance_time = f"{time_match.group(1).zfill(2)}:{time_match.group(2)}"
+                        except:
+                            continue
+                
+                # 결과 반환
+                if performance_name or performance_date:
+                    return {
+                        'name': performance_name if performance_name else '',
+                        'date': performance_date if performance_date else '',
+                        'time': performance_time,
+                        'source': source
+                    }
                 
                 return None
                 
             except Exception as e:
+                st.error(f"⚠️ 파일 읽기 오류: {str(e)}")
                 return None
         
         
@@ -290,13 +290,14 @@ with tab1:
                 if st.button("🔍 공연 정보 추출", type="primary", use_container_width=True):
                     perf_info = extract_performance_info(uploaded_files[0])
                     
-                    if perf_info and perf_info['name']:
+                    if perf_info and (perf_info['name'] or perf_info['date']):
                         st.session_state['extracted_performance_info'] = perf_info
                         st.session_state['performance_info_extracted'] = True
                         st.rerun()
                     else:
-                        st.warning("⚠️ 자동으로 공연 정보를 추출할 수 없습니다.")
+                        st.warning("⚠️ 자동으로 공연 정보를 추출할 수 없습니다. 수동으로 입력해주세요.")
                         st.session_state['manual_input'] = True
+                        st.session_state['extracted_performance_info'] = {'name': '', 'date': '', 'time': ''}
             
             # 추출된 공연 정보 확인
             if st.session_state.get('performance_info_extracted'):
@@ -478,9 +479,13 @@ with tab2:
             
             # 선택된 회차의 예약 리스트 표시
             if 'selected_session_id' in st.session_state:
+                st.markdown("---")
+                st.markdown("# 📊 예약 상세 정보")
+                
                 session_info = st.session_state['selected_session_info']
                 
-                st.markdown("## 📊 예약 상세 정보")
+                # 선택된 회차 강조 표시
+                st.success(f"✅ 조회 중: **{session_info['name']}** - {session_info['date']} {session_info['time'] if session_info['time'] else '시간 미정'}")
                 
                 col1, col2 = st.columns(2)
                 
@@ -494,7 +499,19 @@ with tab2:
                 with col2:
                     st.metric("총 예약", f"{session_info['total']}건")
                 
-                df_reservations = get_reservations(st.session_state['selected_session_id'])
+                # 예약 데이터 조회
+                with st.spinner("예약 데이터를 조회하는 중..."):
+                    df_reservations = get_reservations(st.session_state['selected_session_id'])
+                
+                # 디버깅 정보
+                st.info(f"💾 데이터베이스에서 {len(df_reservations)}건의 예약을 찾았습니다")
+                st.write(f"**DataFrame shape:** {df_reservations.shape}")
+                st.write(f"**DataFrame columns:** {df_reservations.columns.tolist()}")
+                
+                # 강제로 구분선 추가
+                st.markdown("---")
+                st.markdown("### 🔽 아래에 예약 데이터가 표시됩니다")
+                st.markdown("---")
                 
                 if len(df_reservations) > 0:
                     # 통계
@@ -569,3 +586,17 @@ with tab2:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
+                
+                else:
+                    st.error("❌ 해당 회차의 예약 데이터가 없습니다!")
+                    st.warning("""
+                    **가능한 원인:**
+                    1. 통합명부 작성 시 저장이 제대로 안됨
+                    2. 공연 정보만 저장되고 예약 데이터는 저장 안됨
+                    
+                    **해결 방법:**
+                    1. "📝 통합명부 작성" 탭으로 이동
+                    2. 같은 파일을 다시 업로드
+                    3. "🔄 통합하고 저장하기" 버튼 클릭
+                    4. "✅ 총 XX건이 저장되었습니다!" 메시지 확인
+                    """)
