@@ -86,12 +86,12 @@ def parse_excel_file(uploaded_file):
                 elif platform == '티켓링크':
                     data = {
                         '예매처': '티켓링크',
-                        '예매번호': str(row.get('주문번호', '')),
-                        '예매자명': str(row.get('예매자', '')),
-                        '연락처': str(row.get('휴대폰', '')),
-                        '좌석정보': str(row.get('좌석', '')),
-                        '매수': int(row.get('수량', 0)) if pd.notna(row.get('수량', 0)) else 0,
-                        '배정상태': '지정' if pd.notna(row.get('좌석', '')) and str(row.get('좌석', '')) != '' else '비지정'
+                        '예매번호': str(row.get('예매번호(연동사 예매번호)', '')),
+                        '예매자명': str(row.get('성명', '')),
+                        '연락처': str(row.get('연락처(SMS)', '')),
+                        '좌석정보': str(row.get('좌석번호', '')),
+                        '매수': int(row.get('매수', 0)) if pd.notna(row.get('매수', 0)) else 0,
+                        '배정상태': '지정' if pd.notna(row.get('좌석번호', '')) and str(row.get('좌석번호', '')) != '' else '비지정'
                     }
                     result_data.append(data)
                     
