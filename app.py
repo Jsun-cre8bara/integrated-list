@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import re
+import os
 
 # 페이지 설정
 st.set_page_config(
@@ -12,46 +14,71 @@ st.set_page_config(
     layout="wide"
 )
 
-# 데이터베이스 초기화
+# 데이터베이스 연결 정보
 @st.cache_resource
+def get_db_connection():
+    """PostgreSQL 데이터베이스 연결"""
+    try:
+        # Streamlit Secrets에서 DATABASE_URL 가져오기
+        database_url = st.secrets.get("DATABASE_URL", os.getenv("DATABASE_URL"))
+        
+        if not database_url:
+            st.error("❌ DATABASE_URL이 설정되지 않았습니다!")
+            st.stop()
+        
+        conn = psycopg2.connect(database_url, sslmode='require')
+        return conn
+    except Exception as e:
+        st.error(f"❌ 데이터베이스 연결 오류: {str(e)}")
+        st.stop()
+
+conn = get_db_connection()
+
+# 데이터베이스 초기화
 def init_db():
-    """데이터베이스 초기화"""
-    conn = sqlite3.connect('ticketz.db', check_same_thread=False)
+    """데이터베이스 테이블 생성"""
     cursor = conn.cursor()
     
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS performances (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            performance_name TEXT NOT NULL,
-            performance_date TEXT NOT NULL,
-            performance_time TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            total_reservations INTEGER DEFAULT 0,
-            UNIQUE(performance_name, performance_date, performance_time)
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS reservations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            performance_id INTEGER NOT NULL,
-            platform TEXT NOT NULL,
-            reservation_number TEXT,
-            name TEXT,
-            phone TEXT,
-            seat_info TEXT,
-            quantity INTEGER DEFAULT 0,
-            status TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (performance_id) REFERENCES performances (id)
-        )
-    ''')
-    
-    conn.commit()
-    return conn
+    try:
+        # 공연 정보 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS performances (
+                id SERIAL PRIMARY KEY,
+                performance_name TEXT NOT NULL,
+                performance_date TEXT NOT NULL,
+                performance_time TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                total_reservations INTEGER DEFAULT 0,
+                UNIQUE(performance_name, performance_date, performance_time)
+            )
+        ''')
+        
+        # 예약 정보 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reservations (
+                id SERIAL PRIMARY KEY,
+                performance_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,
+                reservation_number TEXT,
+                name TEXT,
+                phone TEXT,
+                seat_info TEXT,
+                quantity INTEGER DEFAULT 0,
+                status TEXT,
+                created_at TIMESTAMP NOT NULL,
+                FOREIGN KEY (performance_id) REFERENCES performances (id) ON DELETE CASCADE
+            )
+        ''')
+        
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"❌ 테이블 생성 오류: {str(e)}")
+    finally:
+        cursor.close()
 
-conn = init_db()
+init_db()
 
 # 제목
 st.title("📋 티켓츠 예매 관리 시스템")
@@ -233,7 +260,7 @@ with tab1:
             try:
                 cursor.execute('''
                     SELECT id FROM performances 
-                    WHERE performance_name = ? AND performance_date = ? AND performance_time = ?
+                    WHERE performance_name = %s AND performance_date = %s AND performance_time = %s
                 ''', (performance_info['name'], performance_info['date'], performance_info['time']))
                 
                 result = cursor.fetchone()
@@ -242,28 +269,29 @@ with tab1:
                     performance_id = result[0]
                     cursor.execute('''
                         UPDATE performances 
-                        SET updated_at = ?, total_reservations = ?
-                        WHERE id = ?
-                    ''', (datetime.now().isoformat(), len(reservation_data), performance_id))
+                        SET updated_at = %s, total_reservations = %s
+                        WHERE id = %s
+                    ''', (datetime.now(), len(reservation_data), performance_id))
                     
-                    cursor.execute('DELETE FROM reservations WHERE performance_id = ?', (performance_id,))
+                    cursor.execute('DELETE FROM reservations WHERE performance_id = %s', (performance_id,))
                     
                 else:
                     cursor.execute('''
                         INSERT INTO performances (performance_name, performance_date, performance_time, created_at, updated_at, total_reservations)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING id
                     ''', (performance_info['name'], performance_info['date'], performance_info['time'], 
-                          datetime.now().isoformat(), datetime.now().isoformat(), len(reservation_data)))
+                          datetime.now(), datetime.now(), len(reservation_data)))
                     
-                    performance_id = cursor.lastrowid
+                    performance_id = cursor.fetchone()[0]
                 
                 for reservation in reservation_data:
                     cursor.execute('''
                         INSERT INTO reservations (performance_id, platform, reservation_number, name, phone, seat_info, quantity, status, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ''', (performance_id, reservation['예매처'], reservation['예매번호'], reservation['예매자명'],
                           reservation['연락처'], reservation['좌석정보'], reservation['매수'], reservation['배정상태'],
-                          datetime.now().isoformat()))
+                          datetime.now()))
                 
                 conn.commit()
                 return True, performance_id
@@ -272,6 +300,8 @@ with tab1:
                 conn.rollback()
                 st.error(f"저장 오류: {str(e)}")
                 return False, None
+            finally:
+                cursor.close()
         
         
         # 메인 로직
@@ -394,24 +424,30 @@ with tab2:
     def get_all_performances():
         """모든 공연 목록 조회"""
         cursor = conn.cursor()
-        cursor.execute('''
-            SELECT DISTINCT performance_name
-            FROM performances
-            ORDER BY performance_name
-        ''')
-        return [row[0] for row in cursor.fetchall()]
+        try:
+            cursor.execute('''
+                SELECT DISTINCT performance_name
+                FROM performances
+                ORDER BY performance_name
+            ''')
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
     
     
     def get_performance_sessions(performance_name):
         """특정 공연의 회차 목록 조회"""
         cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, performance_date, performance_time, updated_at, total_reservations
-            FROM performances
-            WHERE performance_name = ?
-            ORDER BY performance_date, performance_time
-        ''', (performance_name,))
-        return cursor.fetchall()
+        try:
+            cursor.execute('''
+                SELECT id, performance_date, performance_time, updated_at, total_reservations
+                FROM performances
+                WHERE performance_name = %s
+                ORDER BY performance_date, performance_time
+            ''', (performance_name,))
+            return cursor.fetchall()
+        finally:
+            cursor.close()
     
     
     def get_reservations(performance_id):
@@ -419,7 +455,7 @@ with tab2:
         query = '''
             SELECT platform, reservation_number, name, phone, seat_info, quantity, status
             FROM reservations
-            WHERE performance_id = ?
+            WHERE performance_id = %s
             ORDER BY platform, name
         '''
         df = pd.read_sql_query(query, conn, params=(performance_id,))
